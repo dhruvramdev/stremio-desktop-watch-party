@@ -1,0 +1,22 @@
+CC = clang
+CFLAGS = -Wall -Wextra -O2 -std=gnu99 -fPIC
+LDFLAGS = -dynamiclib
+
+TARGET = libstremio-mpv-ipc-shim.dylib
+TEST_TARGET = test_resolver
+
+all: $(TARGET) $(TEST_TARGET)
+
+$(TARGET): export_resolver.o mpv_ipc_shim.o
+	$(CC) $(LDFLAGS) -o $@ $^
+
+test_resolver: test_resolver.o export_resolver.o
+	$(CC) $(CFLAGS) -o $@ $^
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f *.o $(TARGET) $(TEST_TARGET)
+
+.PHONY: all clean

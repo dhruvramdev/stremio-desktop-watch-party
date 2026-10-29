@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""
+Stremio Desktop Watch Party executable wrapper.
+"""
+
+import sys
+import os
+
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, repo_root)
+
+from launcher.cli import main
+
+if __name__ == "__main__":
+    main()

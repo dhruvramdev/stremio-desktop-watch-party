@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C build artifacts
+*.o
+*.dylib
+*.dSYM/
+shim/test_resolver
+shim/libstremio-mpv-ipc-shim.dylib
+
+# Runtime and temp files
+/tmp/
+*.sock
+*.pid
+
+# Environments and builds
+.venv/
+dist/
+build/
+*.spec
+*.egg-info/
+

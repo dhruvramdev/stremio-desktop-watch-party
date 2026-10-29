@@ -1,0 +1,29 @@
+[project]
+name = "stremio-desktop-watch-party"
+version = "1.0.0"
+description = "Native Stremio Desktop synchronized watch party companion for macOS"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Dhruv Ramdev" }
+]
+dependencies = [
+    "websockets>=13.0",
+    "typer>=0.12.0",
+    "rich>=13.8.0",
+    "loguru>=0.7.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+watch-party = "launcher.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["launcher", "controller", "relay", "shim"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"shim/libstremio-mpv-ipc-shim.dylib" = "shim/libstremio-mpv-ipc-shim.dylib"
