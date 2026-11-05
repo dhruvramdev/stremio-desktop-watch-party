@@ -47,7 +47,8 @@ class TestRunner(unittest.TestCase):
         runner = RuntimeEnvironment(
             app_path="/Applications/Stremio.app",
             role="guest",
-            room="test-cleanup"
+            room="test-cleanup",
+            keep_stremio=False
         )
         runner.prepare()
         self.assertIsNotNone(runner.runtime_dir)

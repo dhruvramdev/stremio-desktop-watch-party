@@ -40,6 +40,36 @@ def is_local_url(url: str) -> bool:
         return False
 
 
+def is_socket_responsive(socket_path: str, timeout: float = 0.5) -> bool:
+    """Check if an MPV Unix domain socket is active and responding to IPC commands."""
+    if not socket_path or not os.path.exists(socket_path):
+        return False
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(socket_path)
+        s.sendall(b'{"command": ["get_property", "pause"]}\n')
+        resp = s.recv(1024)
+        s.close()
+        return bool(resp)
+    except Exception:
+        return False
+
+
+def pause_mpv_socket(socket_path: str, timeout: float = 0.5):
+    """Send a pause command to an active MPV IPC socket."""
+    if not socket_path or not os.path.exists(socket_path):
+        return
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(socket_path)
+        s.sendall(b'{"command": ["set_property", "pause", true]}\n')
+        s.close()
+    except Exception:
+        pass
+
+
 class RuntimeEnvironment:
     def __init__(
         self,
@@ -51,7 +81,8 @@ class RuntimeEnvironment:
         auto_relay: bool = True,
         relay_port: int = 8765,
         tunnel: Optional[str] = None,
-        host_only: bool = False
+        host_only: bool = False,
+        keep_stremio: bool = True
     ):
         self.app_path = app_path
         self.role = role
@@ -62,6 +93,8 @@ class RuntimeEnvironment:
         self.relay_port = relay_port
         self.tunnel = tunnel
         self.host_only = host_only
+        self.keep_stremio = keep_stremio
+        self.reusing_stremio = False
 
         # Synchronize port with relay_url
         try:
@@ -112,11 +145,22 @@ class RuntimeEnvironment:
         if custom_dir:
             self.runtime_dir = os.path.abspath(custom_dir)
             os.makedirs(self.runtime_dir, mode=0o700, exist_ok=True)
+            custom_sock = os.path.join(self.runtime_dir, "mpv.sock")
+            if os.path.exists(custom_sock) and is_socket_responsive(custom_sock):
+                self.reusing_stremio = True
+                self.socket_path = custom_sock
         else:
             safe_room = re.sub(r"[^a-zA-Z0-9_-]", "-", self.room or "default").strip("-") or "default"
             candidate = f"/tmp/stremio-wp-{safe_room}"
+            candidate_sock = os.path.join(candidate, "mpv.sock")
             pid_path = os.path.join(candidate, "watch-party.pid")
-            if not os.path.exists(candidate):
+
+            if os.path.exists(candidate_sock) and is_socket_responsive(candidate_sock):
+                self.runtime_dir = candidate
+                self.socket_path = candidate_sock
+                self.reusing_stremio = True
+                logger.info(f"Existing Stremio session with active MPV socket detected at {self.socket_path}. Reattaching...")
+            elif not os.path.exists(candidate):
                 os.makedirs(candidate, mode=0o700, exist_ok=True)
                 self.runtime_dir = candidate
             elif os.path.exists(pid_path) and not self._is_dir_active(candidate):
@@ -127,9 +171,10 @@ class RuntimeEnvironment:
                 self.runtime_dir = tempfile.mkdtemp(prefix=f"stremio-wp-{safe_room}-", dir="/tmp")
 
         os.chmod(self.runtime_dir, 0o700)
-        self.socket_path = os.path.join(self.runtime_dir, "mpv.sock")
+        if not self.socket_path:
+            self.socket_path = os.path.join(self.runtime_dir, "mpv.sock")
         
-        if os.path.exists(self.socket_path):
+        if not self.reusing_stremio and os.path.exists(self.socket_path):
             try:
                 os.unlink(self.socket_path)
             except Exception:
@@ -253,63 +298,66 @@ class RuntimeEnvironment:
         stremio_env = env.copy()
         stremio_env["DYLD_INSERT_LIBRARIES"] = shim_path
 
-        # 2. Spawn Stremio via direct executable
-        # If no other watch-party session is active on this machine, ensure any pre-existing
-        # un-shimmed Stremio instance is closed first so Stremio's single-instance lock does not exit(0).
-        import glob
-        other_active = any(
-            d != self.runtime_dir and os.path.isdir(d) and self._is_dir_active(d)
-            for d in glob.glob("/tmp/stremio-wp-*")
-        )
-        if not other_active:
-            try:
-                chk = subprocess.run(["pgrep", "-x", "Stremio"], capture_output=True, text=True)
-                if chk.returncode != 0:
-                    chk = subprocess.run(["pgrep", "-xi", "stremio"], capture_output=True, text=True)
-                if chk.returncode == 0 and chk.stdout.strip():
-                    logger.info("Closing existing Stremio instance to relaunch with Watch Party shim...")
-                    subprocess.run(["killall", "Stremio"], capture_output=True)
-                    subprocess.run(["killall", "stremio"], capture_output=True)
-                    time.sleep(1.0)
-            except Exception:
-                pass
-
-        executable_path = os.path.join(self.app_path, "Contents", "MacOS", "stremio")
-        if not os.path.exists(executable_path):
-            import plistlib
-            info_plist = os.path.join(self.app_path, "Contents", "Info.plist")
-            exec_name = "Stremio"
-            if os.path.exists(info_plist):
+        # 2. Spawn Stremio via direct executable (or reattach to running instance)
+        if self.reusing_stremio:
+            logger.info(f"Reattaching to running Stremio session via IPC socket: {self.socket_path}")
+        else:
+            # If no other watch-party session is active on this machine, ensure any pre-existing
+            # un-shimmed Stremio instance is closed first so Stremio's single-instance lock does not exit(0).
+            import glob
+            other_active = any(
+                d != self.runtime_dir and os.path.isdir(d) and self._is_dir_active(d)
+                for d in glob.glob("/tmp/stremio-wp-*")
+            )
+            if not other_active:
                 try:
-                    with open(info_plist, "rb") as f:
-                        p = plistlib.load(f)
-                        exec_name = p.get("CFBundleExecutable", "Stremio")
+                    chk = subprocess.run(["pgrep", "-x", "Stremio"], capture_output=True, text=True)
+                    if chk.returncode != 0:
+                        chk = subprocess.run(["pgrep", "-xi", "stremio"], capture_output=True, text=True)
+                    if chk.returncode == 0 and chk.stdout.strip():
+                        logger.info("Closing existing Stremio instance to relaunch with Watch Party shim...")
+                        subprocess.run(["killall", "Stremio"], capture_output=True)
+                        subprocess.run(["killall", "stremio"], capture_output=True)
+                        time.sleep(1.0)
                 except Exception:
                     pass
-            executable_path = os.path.join(self.app_path, "Contents", "MacOS", exec_name)
 
-        logger.info(f"Spawning Stremio from {executable_path}")
-        logger.info(f"Using IPC socket path: {self.socket_path}")
+            executable_path = os.path.join(self.app_path, "Contents", "MacOS", "stremio")
+            if not os.path.exists(executable_path):
+                import plistlib
+                info_plist = os.path.join(self.app_path, "Contents", "Info.plist")
+                exec_name = "Stremio"
+                if os.path.exists(info_plist):
+                    try:
+                        with open(info_plist, "rb") as f:
+                            p = plistlib.load(f)
+                            exec_name = p.get("CFBundleExecutable", "Stremio")
+                    except Exception:
+                        pass
+                executable_path = os.path.join(self.app_path, "Contents", "MacOS", exec_name)
 
-        # Prepare log files to prevent pipe buffer deadlocks
-        stremio_log_path = os.path.join(self.runtime_dir, "stremio.log")
-        self.stremio_log_file = open(stremio_log_path, "w", encoding="utf-8")
+            logger.info(f"Spawning Stremio from {executable_path}")
+            logger.info(f"Using IPC socket path: {self.socket_path}")
 
-        try:
-            self.stremio_proc = subprocess.Popen(
-                [executable_path],
-                env=stremio_env,
-                stdout=self.stremio_log_file,
-                stderr=self.stremio_log_file
-            )
-        except Exception as e:
-            logger.error(f"Failed to spawn Stremio executable directly: {e}. Trying 'open' command...")
-            self.stremio_proc = subprocess.Popen(
-                ["open", "-n", self.app_path],
-                env=stremio_env,
-                stdout=self.stremio_log_file,
-                stderr=self.stremio_log_file
-            )
+            # Prepare log files to prevent pipe buffer deadlocks
+            stremio_log_path = os.path.join(self.runtime_dir, "stremio.log")
+            self.stremio_log_file = open(stremio_log_path, "w", encoding="utf-8")
+
+            try:
+                self.stremio_proc = subprocess.Popen(
+                    [executable_path],
+                    env=stremio_env,
+                    stdout=self.stremio_log_file,
+                    stderr=self.stremio_log_file
+                )
+            except Exception as e:
+                logger.error(f"Failed to spawn Stremio executable directly: {e}. Trying 'open' command...")
+                self.stremio_proc = subprocess.Popen(
+                    ["open", "-n", self.app_path],
+                    env=stremio_env,
+                    stdout=self.stremio_log_file,
+                    stderr=self.stremio_log_file
+                )
 
         # 3. Spawn controller daemon process
         controller_script = os.path.join(repo_root, "controller", "main.py")
@@ -333,7 +381,9 @@ class RuntimeEnvironment:
 
         # Write PID file
         try:
-            pids = [self.stremio_proc.pid, self.controller_proc.pid]
+            pids = [self.controller_proc.pid]
+            if self.stremio_proc:
+                pids.append(self.stremio_proc.pid)
             if self.relay_proc:
                 pids.append(self.relay_proc.pid)
             if self.tunnel_proc:
@@ -362,6 +412,11 @@ class RuntimeEnvironment:
 
     def stop(self):
         logger.info("Stopping Watch Party processes...")
+
+        # 1. Automatically pause Stremio playback before exit so movie doesn't keep running
+        if self.socket_path:
+            pause_mpv_socket(self.socket_path)
+
         if not self.tunnel:
             if self.tunnel_proc:
                 stop_tunnel(self.tunnel_proc)
@@ -388,15 +443,27 @@ class RuntimeEnvironment:
                 except Exception:
                     pass
 
-        if self.stremio_proc:
-            try:
-                self.stremio_proc.terminate()
-                self.stremio_proc.wait(timeout=2)
-            except Exception:
+        if not self.keep_stremio:
+            if self.stremio_proc:
                 try:
-                    self.stremio_proc.kill()
+                    self.stremio_proc.terminate()
+                    self.stremio_proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        self.stremio_proc.kill()
+                    except Exception:
+                        pass
+                self.stremio_proc = None
+
+            # Cleanup runtime dir
+            if self.runtime_dir and os.path.exists(self.runtime_dir):
+                try:
+                    shutil.rmtree(self.runtime_dir)
                 except Exception:
                     pass
+        else:
+            logger.info("Stremio left running in paused state. You can reconnect anytime.")
+            self.stremio_proc = None
 
         # Close log files
         if self.relay_log_file and not self.relay_log_file.closed:
@@ -414,13 +481,6 @@ class RuntimeEnvironment:
         if self.stremio_log_file and not self.stremio_log_file.closed:
             try:
                 self.stremio_log_file.close()
-            except Exception:
-                pass
-
-        # Cleanup runtime dir
-        if self.runtime_dir and os.path.exists(self.runtime_dir):
-            try:
-                shutil.rmtree(self.runtime_dir)
             except Exception:
                 pass
 

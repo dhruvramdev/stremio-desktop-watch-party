@@ -26,7 +26,7 @@ from launcher.compatibility import (
     find_manifest_path,
     find_shim_path
 )
-from launcher.runner import RuntimeEnvironment
+from launcher.runner import RuntimeEnvironment, is_socket_responsive
 from launcher.ui import TerminalDashboard
 from launcher.tunnel import start_tunnel, stop_tunnel
 from relay.protocol import Role, TunnelProvider, SessionStatus
@@ -208,7 +208,8 @@ def _run_session(
     auto_relay: bool,
     force: bool,
     raw: bool,
-    host_only: bool = False
+    host_only: bool = False,
+    quit_stremio: bool = False
 ):
     manifest_path = find_manifest_path()
     app_path = find_stremio_app()
@@ -235,7 +236,8 @@ def _run_session(
         auto_relay=auto_relay,
         relay_port=port,
         tunnel=effective_tunnel,
-        host_only=host_only
+        host_only=host_only,
+        keep_stremio=not quit_stremio
     )
 
     use_ui = not raw and sys.stdout.isatty()
@@ -296,6 +298,11 @@ def _run_session(
                             err = f.read().strip()
                             if err:
                                 console.print("\n[bold yellow]Stremio Log:[/bold yellow]\n" + err)
+                break
+            elif runner.reusing_stremio and not is_socket_responsive(runner.socket_path):
+                if use_ui and dashboard:
+                    dashboard.cleanup()
+                console.print("\nStremio application was closed.")
                 break
 
             if runner.controller_proc and runner.controller_proc.poll() is not None:
@@ -511,6 +518,11 @@ def host(
         "--host-only",
         help="Lock playback controls so only the host can pause, play, or seek (default: shared control)"
     ),
+    quit_stremio: bool = typer.Option(
+        False,
+        "--quit-stremio",
+        help="Terminate Stremio application upon exit instead of keeping it running paused for reconnect"
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Force launch despite warnings"),
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")
 ):
@@ -527,7 +539,8 @@ def host(
         auto_relay=True,
         force=force,
         raw=raw,
-        host_only=host_only
+        host_only=host_only,
+        quit_stremio=quit_stremio
     )
 
 
@@ -536,6 +549,11 @@ def join(
     room: str = typer.Argument("movie-night", help="Watch party room identifier"),
     secret: str = typer.Option("chikita", "--secret", "-s", help="Room pre-shared authorization secret"),
     relay: str = typer.Option(..., "--relay", help="Host relay WebSocket URL (wss://...)"),
+    quit_stremio: bool = typer.Option(
+        False,
+        "--quit-stremio",
+        help="Terminate Stremio application upon exit instead of keeping it running paused for reconnect"
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Force launch despite warnings"),
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")
 ):
@@ -550,7 +568,8 @@ def join(
         tunnel_provider=TunnelProvider.AUTO,
         auto_relay=False,
         force=force,
-        raw=raw
+        raw=raw,
+        quit_stremio=quit_stremio
     )
 
 
