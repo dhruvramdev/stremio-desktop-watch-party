@@ -367,16 +367,16 @@ class RuntimeEnvironment:
                 stop_tunnel(self.tunnel_proc)
                 self.tunnel_proc = None
 
-            if self.relay_proc:
+        if self.relay_proc:
+            try:
+                self.relay_proc.terminate()
+                self.relay_proc.wait(timeout=2)
+            except Exception:
                 try:
-                    self.relay_proc.terminate()
-                    self.relay_proc.wait(timeout=2)
+                    self.relay_proc.kill()
                 except Exception:
-                    try:
-                        self.relay_proc.kill()
-                    except Exception:
-                        pass
-                self.relay_proc = None
+                    pass
+            self.relay_proc = None
 
         if self.controller_proc:
             try:

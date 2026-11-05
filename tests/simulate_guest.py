@@ -56,7 +56,10 @@ async def run_guest_test(relay_url: str, room: str, secret: str):
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=max(0.1, end_wait - time.time()))
                 msg = json.loads(raw)
-                print(f"    <- Host heartbeat during guest pause: paused={msg.get('paused')}, time_s={msg.get('time_s')}")
+                if msg.get("type") == "error":
+                    print(f"    [!] Relay rejected command: {msg}")
+                else:
+                    print(f"    <- Host heartbeat during guest pause: type={msg.get('type')}, paused={msg.get('paused')}, time_s={msg.get('time_s')}")
             except asyncio.TimeoutError:
                 break
 
