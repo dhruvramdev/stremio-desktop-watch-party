@@ -1,6 +1,6 @@
 CC = clang
 CFLAGS = -Wall -Wextra -O2 -std=gnu99 -fPIC
-LDFLAGS = -dynamiclib -L. -lmpv.2
+LDFLAGS = -dynamiclib -L. -lmpv.2 -Wl,-rpath,@executable_path/. -Wl,-rpath,/Applications/Stremio.app/Contents/MacOS
 TEST_LDFLAGS = -Wl,-rpath,/Applications/Stremio.app/Contents/MacOS
 
 TARGET = libstremio-mpv-ipc-shim.dylib

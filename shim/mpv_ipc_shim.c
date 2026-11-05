@@ -12,6 +12,16 @@ typedef int (*mpv_set_option_string_t)(mpv_handle *ctx, const char *name, const 
 /* External symbol to be interposed at launch time via dyld */
 extern int mpv_initialize(mpv_handle *ctx);
 
+/*
+ * Once dyld loads this shim into the main Stremio process, strip
+ * DYLD_INSERT_LIBRARIES from the environment so child processes
+ * spawned by Stremio (like `node server.js`, `ffmpeg`, `ffprobe`)
+ * do not inherit the shim.
+ */
+__attribute__((constructor)) static void stremio_wp_shim_ctor(void) {
+    unsetenv("DYLD_INSERT_LIBRARIES");
+}
+
 static void *g_libmpv = NULL;
 
 static void *get_libmpv_handle(void) {
