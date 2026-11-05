@@ -348,7 +348,8 @@ class RuntimeEnvironment:
                     [executable_path],
                     env=stremio_env,
                     stdout=self.stremio_log_file,
-                    stderr=self.stremio_log_file
+                    stderr=self.stremio_log_file,
+                    start_new_session=True
                 )
             except Exception as e:
                 logger.error(f"Failed to spawn Stremio executable directly: {e}. Trying 'open' command...")
@@ -356,7 +357,8 @@ class RuntimeEnvironment:
                     ["open", "-n", self.app_path],
                     env=stremio_env,
                     stdout=self.stremio_log_file,
-                    stderr=self.stremio_log_file
+                    stderr=self.stremio_log_file,
+                    start_new_session=True
                 )
 
         # 3. Spawn controller daemon process
