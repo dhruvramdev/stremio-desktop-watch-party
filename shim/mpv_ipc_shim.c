@@ -9,11 +9,8 @@ typedef struct mpv_handle mpv_handle;
 typedef int (*mpv_initialize_t)(mpv_handle *ctx);
 typedef int (*mpv_set_option_string_t)(mpv_handle *ctx, const char *name, const char *data);
 
-/* Dummy definition or weak reference so linker doesn't complain about undefined _mpv_initialize */
-int mpv_initialize(mpv_handle *ctx) {
-    (void)ctx;
-    return 0;
-}
+/* External symbol to be interposed at launch time via dyld */
+extern int mpv_initialize(mpv_handle *ctx);
 
 static void *g_libmpv = NULL;
 

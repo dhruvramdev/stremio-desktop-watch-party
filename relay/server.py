@@ -84,8 +84,12 @@ class RelayServer:
             provided_secret = hello.secret
             requested_role = hello.role
 
-            # Get or create room (using default secret if room not pre-configured)
-            room = await self.register_room(room_id, self.default_secret)
+            # Get or create room (hosts establish room secret if new)
+            if room_id not in self.rooms:
+                room_secret = provided_secret if (requested_role == Role.HOST and provided_secret) else self.default_secret
+                room = await self.register_room(room_id, room_secret)
+            else:
+                room = self.rooms[room_id]
 
             # Verify secret
             if not self.verify_secret(provided_secret, room.secret):

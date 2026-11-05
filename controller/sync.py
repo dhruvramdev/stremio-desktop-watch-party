@@ -95,7 +95,11 @@ class SyncEngine:
 
     def calculate_drift(self, local_time_s, host_time_s, sent_at_ms, now_ms, host_paused):
         if not host_paused:
-            expected_time = host_time_s + (now_ms - sent_at_ms) / 1000.0
+            transit_s = (now_ms - sent_at_ms) / 1000.0 if (now_ms and sent_at_ms) else 0.0
+            # Clamp elapsed transit time to [0.0, 2.0] seconds to prevent cross-machine clock skew
+            if transit_s < 0.0 or transit_s > 2.0:
+                transit_s = 0.05
+            expected_time = host_time_s + transit_s
         else:
             expected_time = host_time_s
         

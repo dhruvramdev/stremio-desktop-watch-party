@@ -1,6 +1,6 @@
 CC = clang
 CFLAGS = -Wall -Wextra -O2 -std=gnu99 -fPIC
-LDFLAGS = -dynamiclib
+LDFLAGS = -dynamiclib -undefined dynamic_lookup
 
 TARGET = libstremio-mpv-ipc-shim.dylib
 TEST_TARGET = test_resolver

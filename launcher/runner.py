@@ -124,6 +124,7 @@ class RuntimeEnvironment:
         env["STREMIO_WP_SECRET"] = self.secret
         env["STREMIO_WP_RELAY"] = self.relay_url
         env["STREMIO_WP_ROLE"] = self.role
+        env["STREMIO_PATH"] = self.app_path
 
         # 1. If role is host and auto_relay is enabled, ensure relay is up
         if self.role == "host" and self.auto_relay and is_local_url(self.relay_url):
@@ -216,7 +217,7 @@ class RuntimeEnvironment:
         self.controller_log_file = open(controller_log_path, "w", encoding="utf-8")
 
         if getattr(sys, "frozen", False):
-            controller_cmd = [sys.executable, "_controller"]
+            controller_cmd = [sys.executable, "controller"]
         elif os.path.exists(controller_script):
             controller_cmd = [sys.executable, controller_script]
         else:

@@ -62,11 +62,13 @@ static int walk_export_trie(const uint8_t *trie_start, const uint8_t *trie_end,
         }
         if (p_child < trie_end) p_child++; /* skip '\0' */
         
-        if (prefix_len + len >= max_len) continue;
-        memcpy(prefix + prefix_len, s, len);
-        
         uint64_t child_node_offset = read_uleb128_local(&p_child, trie_end);
         if (child_node_offset == 0) continue;
+
+        if (prefix_len + len >= max_len) continue;
+        if (strncmp(symbol_name + prefix_len, (const char *)s, len) != 0) continue;
+
+        memcpy(prefix + prefix_len, s, len);
         
         if (walk_export_trie(trie_start, trie_end, trie_start + child_node_offset,
                              symbol_name, prefix, prefix_len + len, max_len, out_offset)) {

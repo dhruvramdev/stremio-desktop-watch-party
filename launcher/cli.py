@@ -146,6 +146,18 @@ def doctor(
         raise typer.Exit(code=1)
 
 
+def copy_to_clipboard(text: str) -> bool:
+    """Copy text to macOS system clipboard via pbcopy."""
+    if sys.platform == "darwin":
+        try:
+            p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+            p.communicate(text.encode("utf-8"), timeout=1.0)
+            return True
+        except Exception:
+            return False
+    return False
+
+
 @app.command()
 def start(
     role: Role = typer.Option(Role.GUEST, "--role", "-r", help="Participant role: 'host' (broadcasting) or 'guest' (following)"),
@@ -157,6 +169,7 @@ def start(
         None,
         "--tunnel",
         "-t",
+        flag_value=TunnelProvider.AUTO,
         help="Expose host relay via secure internet tunnel (auto/cloudflared/tailscale)"
     ),
     auto_relay: bool = typer.Option(True, "--auto-relay/--no-auto-relay", help="Automatically launch embedded relay server when role=host"),
@@ -194,6 +207,16 @@ def start(
     try:
         runner.start()
 
+        if role == Role.HOST:
+            invite_relay = runner.public_url or runner.relay_url
+            invite_cmd = f"watch-party join {room} --secret {secret} --relay {invite_relay}"
+            copied = copy_to_clipboard(invite_cmd)
+            if not use_ui:
+                console.print(f"\n[bold green]Room Ready![/bold green] Share this command with guests:")
+                console.print(f"  [bold cyan]{invite_cmd}[/bold cyan]")
+                if copied:
+                    console.print("  [dim]📋 Copied to clipboard![/dim]\n")
+
         if use_ui:
             dashboard = TerminalDashboard(
                 room=room,
@@ -206,28 +229,49 @@ def start(
         else:
             console.print(f"Stremio Watch Party started in {role.value} mode for room '{room}'.")
             console.print(f"Runtime directory: {runner.runtime_dir}")
-            if role == Role.HOST:
-                invite_relay = runner.public_url or runner.relay_url
-                console.print(f"\n[bold green]Room Ready![/bold green] Share this command with guests:")
-                console.print(f"  [bold cyan]watch-party start --role guest --room {room} --secret {secret} --relay {invite_relay}[/bold cyan]\n")
             console.print("Press Ctrl+C to stop.")
 
         while True:
             status = runner.get_status()
             if use_ui and dashboard:
                 dashboard.render(status)
+            elif not use_ui and status:
+                st = status.get("state", {})
+                p_state = "PAUSED" if st.get("paused") else "PLAYING"
+                drift_ms = int(st.get("drift_s", 0) * 1000)
+                console.print(
+                    f"[{time.strftime('%X')}] {p_state} "
+                    f"pos={st.get('time_s', 0):.1f}s/{st.get('duration_s', 0):.1f}s "
+                    f"drift={drift_ms:+d}ms peers={len(status.get('clients', []))}"
+                )
 
             # Check if child processes exited
             if runner.stremio_proc and runner.stremio_proc.poll() is not None:
                 if use_ui and dashboard:
                     dashboard.cleanup()
-                console.print("\nStremio application process terminated.")
+                rc = runner.stremio_proc.returncode
+                console.print(f"\nStremio application process terminated (exit code {rc}).")
+                if rc != 0 and runner.runtime_dir:
+                    stremio_log = os.path.join(runner.runtime_dir, "stremio.log")
+                    if os.path.exists(stremio_log):
+                        with open(stremio_log, "r", encoding="utf-8") as f:
+                            err = f.read().strip()
+                            if err:
+                                console.print("\n[bold yellow]Stremio Log:[/bold yellow]\n" + err)
                 break
 
             if runner.controller_proc and runner.controller_proc.poll() is not None:
                 if use_ui and dashboard:
                     dashboard.cleanup()
-                console.print("\nWatch Party controller daemon terminated.")
+                rc = runner.controller_proc.returncode
+                console.print(f"\n[bold red]Watch Party controller daemon terminated unexpectedly (exit code {rc}).[/bold red]")
+                if runner.runtime_dir:
+                    ctrl_log = os.path.join(runner.runtime_dir, "controller.log")
+                    if os.path.exists(ctrl_log):
+                        with open(ctrl_log, "r", encoding="utf-8") as f:
+                            err = f.read().strip()
+                            if err:
+                                console.print("\n[bold red]Controller Log:[/bold red]\n" + err)
                 break
 
             time.sleep(0.25)
@@ -372,6 +416,7 @@ def relay(
         None,
         "--tunnel",
         "-t",
+        flag_value=TunnelProvider.AUTO,
         help="Expose relay via secure internet tunnel (auto/cloudflared/tailscale)"
     )
 ):
@@ -382,11 +427,66 @@ def relay(
         pass
 
 
-@app.command(hidden=True)
-def _controller():
+@app.command()
+def host(
+    room: str = typer.Option("movie-night", "--room", "-r", help="Watch party room identifier"),
+    secret: Optional[str] = typer.Option(None, "--secret", "-s", help="Room password (auto-generated if omitted)"),
+    port: int = typer.Option(8765, "--port", "-p", help="Embedded relay server port"),
+    tunnel: Optional[TunnelProvider] = typer.Option(
+        TunnelProvider.AUTO,
+        "--tunnel",
+        "-t",
+        flag_value=TunnelProvider.AUTO,
+        help="Expose via internet tunnel (auto/cloudflared/tailscale)"
+    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Force launch despite warnings"),
+    raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")
+):
+    """Quickstart: Host a watch party with automatic relay and internet tunnel."""
+    import secrets
+    sec = secret or secrets.token_hex(4)
+    start(
+        role=Role.HOST,
+        room=room,
+        secret=sec,
+        port=port,
+        tunnel=tunnel,
+        auto_relay=True,
+        force=force,
+        raw=raw
+    )
+
+
+@app.command()
+def join(
+    room: str = typer.Argument("default-room", help="Watch party room identifier"),
+    secret: str = typer.Option(..., "--secret", "-s", help="Room pre-shared authorization secret"),
+    relay: str = typer.Option(..., "--relay", help="Host relay WebSocket URL (wss://...)"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force launch despite warnings"),
+    raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")
+):
+    """Quickstart: Join an active watch party room as a guest."""
+    start(
+        role=Role.GUEST,
+        room=room,
+        secret=secret,
+        relay=relay,
+        force=force,
+        raw=raw
+    )
+
+
+@app.command("controller", hidden=True)
+def controller():
     """Internal daemon entry point for compiled/standalone runner."""
     from controller.main import main as controller_main
     controller_main()
+
+
+@app.command("_controller", hidden=True)
+def _controller():
+    """Fallback alias for internal daemon."""
+    controller()
 
 
 def main():
