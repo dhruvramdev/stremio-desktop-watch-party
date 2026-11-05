@@ -110,33 +110,81 @@ class TestRelay(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(play_received[0]["time"], 10.5)
             self.assertEqual(play_received[0]["sender"], "host1")
 
-    async def test_rejection_of_guest_control_broadcasting(self):
+    async def test_shared_control_and_host_only_lock(self):
         uri = f"ws://127.0.0.1:{self.port}"
 
-        # Connect guest via websockets
-        async with websockets.connect(uri) as guest_ws:
-            await guest_ws.send(json.dumps({
+        # 1. Shared mode (default): guest CAN broadcast play/pause/seek to host
+        async with websockets.connect(uri) as host_ws:
+            await host_ws.send(json.dumps({
                 "type": "hello",
-                "room": "room_guest_ctrl",
-                "sender": "guest_rogue",
+                "room": "room_shared",
+                "sender": "host_s",
                 "secret": self.secret,
-                "role": "guest",
+                "role": "host",
+                "host_only": False,
                 "version": 1
             }))
-            welcome = json.loads(await guest_ws.recv())
-            self.assertEqual(welcome["type"], "welcome")
+            await host_ws.recv()  # welcome
 
-            # Guest tries to send play control
-            await guest_ws.send(json.dumps({
-                "type": "play",
-                "seq": 1,
-                "sent_at_ms": 123456789,
-                "time": 0.0
+            async with websockets.connect(uri) as guest_ws:
+                await guest_ws.send(json.dumps({
+                    "type": "hello",
+                    "room": "room_shared",
+                    "sender": "guest_s",
+                    "secret": self.secret,
+                    "role": "guest",
+                    "version": 1
+                }))
+                await guest_ws.recv()  # welcome
+                await host_ws.recv()   # join notification
+
+                await guest_ws.send(json.dumps({
+                    "type": "pause",
+                    "seq": 1,
+                    "sent_at_ms": 123456789,
+                    "time_s": 42.0,
+                    "paused": True
+                }))
+                relayed = json.loads(await asyncio.wait_for(host_ws.recv(), timeout=2.0))
+                self.assertEqual(relayed["type"], "pause")
+                self.assertEqual(relayed["sender"], "guest_s")
+
+        # 2. Host-only mode (host_only=True): guest play/pause/seek is rejected
+        async with websockets.connect(uri) as host_ws:
+            await host_ws.send(json.dumps({
+                "type": "hello",
+                "room": "room_locked",
+                "sender": "host_locked",
+                "secret": self.secret,
+                "role": "host",
+                "host_only": True,
+                "version": 1
             }))
+            await host_ws.recv()  # welcome
 
-            resp = json.loads(await asyncio.wait_for(guest_ws.recv(), timeout=2.0))
-            self.assertEqual(resp["type"], "error")
-            self.assertEqual(resp["message"], "only host can broadcast controls")
+            async with websockets.connect(uri) as guest_ws:
+                await guest_ws.send(json.dumps({
+                    "type": "hello",
+                    "room": "room_locked",
+                    "sender": "guest_rogue",
+                    "secret": self.secret,
+                    "role": "guest",
+                    "version": 1
+                }))
+                welcome = json.loads(await guest_ws.recv())
+                self.assertEqual(welcome["type"], "welcome")
+                self.assertTrue(welcome["host_only"])
+
+                await guest_ws.send(json.dumps({
+                    "type": "play",
+                    "seq": 1,
+                    "sent_at_ms": 123456789,
+                    "time_s": 0.0
+                }))
+
+                resp = json.loads(await asyncio.wait_for(guest_ws.recv(), timeout=2.0))
+                self.assertEqual(resp["type"], "error")
+                self.assertEqual(resp["message"], "only host can broadcast controls")
 
     async def test_disconnection_and_room_state_cleanup(self):
         uri = f"ws://127.0.0.1:{self.port}"

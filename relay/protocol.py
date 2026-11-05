@@ -44,6 +44,7 @@ class HelloMessage(BaseMessage):
     sender: str
     secret: str = ""
     role: Role = Role.GUEST
+    host_only: bool = False
     version: int = 1
 
 
@@ -51,6 +52,7 @@ class WelcomeMessage(BaseMessage):
     type: MessageType = MessageType.WELCOME
     room: str
     role: Role
+    host_only: bool = False
     clients: list[str] = Field(default_factory=list)
 
 
@@ -100,6 +102,7 @@ class SessionStatus(BaseModel):
     updated_at: float = Field(default_factory=time.time)
     role: Role = Role.GUEST
     room: str = "default-room"
+    host_only: bool = False
     relay_url: str = ""
     relay_connected: bool = False
     mpv_connected: bool = False

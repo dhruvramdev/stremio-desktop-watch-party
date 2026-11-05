@@ -50,7 +50,8 @@ class RuntimeEnvironment:
         relay_url: str = "ws://localhost:8765",
         auto_relay: bool = True,
         relay_port: int = 8765,
-        tunnel: Optional[str] = None
+        tunnel: Optional[str] = None,
+        host_only: bool = False
     ):
         self.app_path = app_path
         self.role = role
@@ -60,6 +61,7 @@ class RuntimeEnvironment:
         self.auto_relay = auto_relay
         self.relay_port = relay_port
         self.tunnel = tunnel
+        self.host_only = host_only
 
         # Synchronize port with relay_url
         try:
@@ -162,6 +164,7 @@ class RuntimeEnvironment:
         env["STREMIO_WP_SECRET"] = self.secret
         env["STREMIO_WP_RELAY"] = self.relay_url
         env["STREMIO_WP_ROLE"] = self.role
+        env["STREMIO_WP_HOST_ONLY"] = "1" if self.host_only else "0"
         env["STREMIO_PATH"] = self.app_path
 
         # 1. If role is host and auto_relay is enabled, ensure relay is up

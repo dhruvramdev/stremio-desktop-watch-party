@@ -110,7 +110,13 @@ class TerminalDashboard:
         mpv_status = "[green]Connected[/green]" if mpv_connected else "[red]Waiting for Stremio video...[/red]"
         relay_status = f"[green]Connected[/green] ({len(clients)} peers)" if relay_connected else "[red]Connecting...[/red]"
 
-        role_label = "[bold green]HOST [Broadcasting][/bold green]" if role_val == "HOST" else "[bold blue]GUEST [Following][/bold blue]"
+        host_only = status.get("host_only", False)
+        mode_tag = "Host-Only Lock" if host_only else "Shared Control"
+        role_label = (
+            f"[bold green]HOST [{mode_tag}][/bold green]"
+            if role_val == "HOST"
+            else f"[bold blue]GUEST [{mode_tag}][/bold blue]"
+        )
 
         # Main Layout Grid Table
         grid = Table.grid(expand=True, padding=(0, 1))

@@ -21,9 +21,10 @@ from relay.protocol import (
 
 
 class Room:
-    def __init__(self, room_id: str, secret: str):
+    def __init__(self, room_id: str, secret: str, host_only: bool = False):
         self.room_id = room_id
         self.secret = secret
+        self.host_only = host_only
         self.host_websocket: WebSocketServerProtocol | None = None
         self.host_sender: str | None = None
         # map websocket -> client info dict {"sender": str, "role": Role}
@@ -34,10 +35,11 @@ class Room:
 
 
 class RelayServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765, default_secret: str = "secret"):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8765, default_secret: str = "secret", host_only: bool = False):
         self.host = host
         self.port = port
         self.default_secret = default_secret
+        self.default_host_only = host_only
         # room_id -> Room
         self.rooms: dict[str, Room] = {}
         self.server = None
@@ -47,9 +49,9 @@ class RelayServer:
             return False
         return hmac.compare_digest(provided_secret.encode("utf-8"), expected_secret.encode("utf-8"))
 
-    async def register_room(self, room_id: str, secret: str) -> Room:
+    async def register_room(self, room_id: str, secret: str, host_only: bool = False) -> Room:
         if room_id not in self.rooms:
-            self.rooms[room_id] = Room(room_id, secret)
+            self.rooms[room_id] = Room(room_id, secret, host_only=host_only)
         return self.rooms[room_id]
 
     async def handle_connection(self, websocket: WebSocketServerProtocol):
@@ -87,11 +89,14 @@ class RelayServer:
             # Get or create room (hosts establish room secret if new or if room has no host)
             if room_id not in self.rooms:
                 room_secret = provided_secret if (requested_role == Role.HOST and provided_secret) else self.default_secret
-                room = await self.register_room(room_id, room_secret)
+                room_host_only = bool(hello.host_only) if requested_role == Role.HOST else self.default_host_only
+                room = await self.register_room(room_id, room_secret, host_only=room_host_only)
             else:
                 room = self.rooms[room_id]
-                if requested_role == Role.HOST and room.host_websocket is None and provided_secret:
-                    room.secret = provided_secret
+                if requested_role == Role.HOST and room.host_websocket is None:
+                    if provided_secret:
+                        room.secret = provided_secret
+                    room.host_only = bool(hello.host_only) or self.default_host_only
 
             # Verify secret
             if not self.verify_secret(provided_secret, room.secret):
@@ -120,6 +125,7 @@ class RelayServer:
             welcome_msg = WelcomeMessage(
                 room=room_id,
                 role=role,
+                host_only=room.host_only,
                 clients=client_senders
             )
             await websocket.send(welcome_msg.model_dump_json())
@@ -133,7 +139,7 @@ class RelayServer:
             )
             await self.broadcast_to_room(room, join_msg.model_dump(), exclude=websocket)
 
-            logger.info(f"Client {sender} ({role.value}) joined room {room_id}")
+            logger.info(f"Client {sender} ({role.value}) joined room {room_id} (host_only={room.host_only})")
 
             # Message loop
             async for raw_msg in websocket:
@@ -149,13 +155,23 @@ class RelayServer:
                     await websocket.send(json.dumps({"type": MessageType.PONG.value}))
                     continue
 
-                # Control message forwarding: play, pause, seek, state
-                if msg_type in (MessageType.PLAY.value, MessageType.PAUSE.value, MessageType.SEEK.value, MessageType.STATE.value):
+                # Periodic state heartbeats are strictly sent by the room host
+                if msg_type == MessageType.STATE.value:
                     if not room.is_authenticated_host(websocket):
+                        await websocket.send(ErrorMessage(message="only host can broadcast state").model_dump_json())
+                        continue
+                    msg["room"] = room_id
+                    msg["sender"] = sender
+                    await self.broadcast_to_room(room, msg, exclude=websocket)
+                    continue
+
+                # Control message forwarding: play, pause, seek
+                # Shared by default across all room participants unless room.host_only is enabled
+                if msg_type in (MessageType.PLAY.value, MessageType.PAUSE.value, MessageType.SEEK.value):
+                    if room.host_only and not room.is_authenticated_host(websocket):
                         await websocket.send(ErrorMessage(message="only host can broadcast controls").model_dump_json())
                         continue
-                    
-                    # Broadcast valid host message to all other clients in the room
+
                     msg["room"] = room_id
                     msg["sender"] = sender
                     await self.broadcast_to_room(room, msg, exclude=websocket)

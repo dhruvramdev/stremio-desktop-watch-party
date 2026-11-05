@@ -25,6 +25,7 @@ def load_config(args=None) -> dict:
         "secret": "default-secret",
         "relay": "ws://localhost:8765",
         "role": "guest",
+        "host_only": False,
         "socket": None
     }
 
@@ -46,6 +47,8 @@ def load_config(args=None) -> dict:
         config["relay"] = os.environ.get("STREMIO_WP_RELAY")
     if os.environ.get("STREMIO_WP_ROLE"):
         config["role"] = os.environ.get("STREMIO_WP_ROLE")
+    if os.environ.get("STREMIO_WP_HOST_ONLY"):
+        config["host_only"] = os.environ.get("STREMIO_WP_HOST_ONLY") in ("1", "true", "True", "yes")
     if os.environ.get("STREMIO_WP_SOCKET"):
         config["socket"] = os.environ.get("STREMIO_WP_SOCKET")
 

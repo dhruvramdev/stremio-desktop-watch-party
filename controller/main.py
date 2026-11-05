@@ -29,11 +29,13 @@ class WatchPartyController:
         self.relay_url = config.get("relay")
         role_raw = config.get("role", "guest")
         self.role = Role(role_raw) if isinstance(role_raw, str) else role_raw
+        self.host_only = bool(config.get("host_only", False))
         self.sender = config.get("sender") or f"user-{uuid.uuid4().hex[:8]}"
 
         self.recent_events = []
         self._running = False
         self._status_task = None
+        self._last_local_control_mono = 0.0
 
         self.sync_engine = SyncEngine(on_local_event=self.handle_local_event)
         self.mpv_client = MpvIpcClient(
@@ -46,6 +48,7 @@ class WatchPartyController:
             sender=self.sender,
             secret=self.secret,
             role=self.role,
+            host_only=self.host_only,
             on_message_callback=self.handle_remote_message,
             get_state_callback=lambda: self.sync_engine.state
         )
@@ -72,6 +75,7 @@ class WatchPartyController:
             updated_at=now,
             role=self.role,
             room=self.room,
+            host_only=self.host_only,
             relay_url=self.relay_url,
             relay_connected=self.relay_client.connected,
             mpv_connected=self.mpv_client.connected,
@@ -93,10 +97,11 @@ class WatchPartyController:
         self._write_status()
 
     def handle_local_event(self, event_type, data):
-        if self.role != Role.HOST:
-            logger.debug(f"Ignoring local event {event_type} as guest role")
+        if self.role != Role.HOST and self.host_only:
+            logger.debug(f"Ignoring local event {event_type} in host-only mode")
             return
 
+        self._last_local_control_mono = time.monotonic()
         logger.info(f"Local event triggered: {event_type} with data {data}")
         if event_type == "local_pause":
             paused = data.get("paused")
@@ -107,7 +112,8 @@ class WatchPartyController:
                 self.relay_client.send_control(msg_type, {
                     "room": self.room,
                     "sender": self.sender,
-                    "time_s": self.sync_engine.state["time_s"]
+                    "time_s": self.sync_engine.state["time_s"],
+                    "paused": paused
                 })
             )
         elif event_type == "local_seek":
@@ -138,17 +144,35 @@ class WatchPartyController:
             self._write_status(f"Peer '{sender}' left room")
             return
         elif msg_type == MessageType.WELCOME.value:
-            self._write_status(f"Connected to room '{self.room}' as {self.role.value}")
+            if "host_only" in msg:
+                self.host_only = bool(msg.get("host_only"))
+            mode_str = "host-only" if self.host_only else "shared"
+            self._write_status(f"Connected to room '{self.room}' as {self.role.value} ({mode_str})")
             return
 
-        if self.role == Role.HOST:
-            # Host ignores incoming control commands from guests to maintain authority
+        if msg_type == MessageType.STATE.value:
+            if self.role == Role.HOST:
+                return
+            # Ignore in-flight periodic state heartbeats for 2.5s after a local control action
+            # so a guest's fresh pause/play/seek is not reverted before the host processes it.
+            if time.monotonic() - self._last_local_control_mono < 2.5:
+                logger.debug("Ignoring in-flight host state heartbeat during local control cooldown")
+                return
+
+        if self.role == Role.HOST and self.host_only:
+            # In host-only mode, host ignores incoming control commands from guests
             return
 
-        # Guest handling host commands
+        # Handle peer control commands (play, pause, seek) and host periodic state heartbeats
         if msg_type in (MessageType.PLAY.value, MessageType.PAUSE.value, MessageType.SEEK.value, MessageType.STATE.value):
-            host_time = msg.get("time_s", 0.0)
-            host_paused = msg.get("paused", msg_type == MessageType.PAUSE.value)
+            peer_time = msg.get("time_s", msg.get("time", 0.0))
+            if msg_type == MessageType.PAUSE.value:
+                peer_paused = True
+            elif msg_type == MessageType.PLAY.value:
+                peer_paused = False
+            else:
+                peer_paused = msg.get("paused", self.sync_engine.state["paused"])
+
             sent_at_ms = msg.get("sent_at_ms", int(time.time() * 1000))
             now_ms = int(time.time() * 1000)
 
@@ -156,31 +180,35 @@ class WatchPartyController:
             local_paused = self.sync_engine.state["paused"]
 
             drift, expected_time, needs_seek = self.sync_engine.calculate_drift(
-                local_time, host_time, sent_at_ms, now_ms, host_paused
+                local_time, peer_time, sent_at_ms, now_ms, peer_paused
             )
-            self.sync_engine.state["drift_s"] = drift
+            if self.role != Role.HOST:
+                self.sync_engine.state["drift_s"] = drift
 
-            logger.info(f"Drift analysis: drift={drift:.2f}s, needs_seek={needs_seek}, host_paused={host_paused}, local_paused={local_paused}")
+            logger.info(f"Sync analysis ({msg_type} from {sender}): drift={drift:.2f}s, needs_seek={needs_seek}, peer_paused={peer_paused}, local_paused={local_paused}")
+
+            peer_label = f"Peer '{sender}'" if self.role == Role.HOST else "Host"
 
             if msg_type == MessageType.SEEK.value or needs_seek:
                 self.sync_engine.register_remote_command("time-pos", expected_time)
                 try:
                     await self.mpv_client.seek(expected_time)
-                    action_msg = f"Host seek -> {expected_time:.1f}s (drift: {drift*1000:.0f}ms)"
+                    action_msg = f"{peer_label} seek -> {expected_time:.1f}s (drift: {drift*1000:.0f}ms)"
                     self._write_status(action_msg)
                     logger.info(f"Enforced remote seek to {expected_time:.2f}s")
                 except Exception as e:
                     logger.error(f"Failed to execute remote seek: {e}")
 
-            if local_paused != host_paused:
-                self.sync_engine.register_remote_command("pause", host_paused)
-                try:
-                    await self.mpv_client.set_pause(host_paused)
-                    action_msg = f"Host {'paused' if host_paused else 'resumed'} playback"
-                    self._write_status(action_msg)
-                    logger.info(f"Enforced remote pause state: {host_paused}")
-                except Exception as e:
-                    logger.error(f"Failed to execute remote pause: {e}")
+            if local_paused != peer_paused or msg_type in (MessageType.PLAY.value, MessageType.PAUSE.value):
+                if local_paused != peer_paused:
+                    self.sync_engine.register_remote_command("pause", peer_paused)
+                    try:
+                        await self.mpv_client.set_pause(peer_paused)
+                        action_msg = f"{peer_label} {'paused' if peer_paused else 'resumed'} playback"
+                        self._write_status(action_msg)
+                        logger.info(f"Enforced remote pause state: {peer_paused}")
+                    except Exception as e:
+                        logger.error(f"Failed to execute remote pause: {e}")
 
             self._write_status()
 

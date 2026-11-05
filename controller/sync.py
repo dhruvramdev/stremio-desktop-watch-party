@@ -23,6 +23,8 @@ class SyncEngine:
             old_paused = self.state["paused"]
             new_paused = bool(data)
             self.state["paused"] = new_paused
+            if old_paused and not new_paused:
+                self.last_time_update_monotonic = now_mono
             
             if self._is_suppressed("pause", new_paused):
                 logger.debug(f"Echo suppressed local pause change: {new_paused}")
@@ -70,11 +72,18 @@ class SyncEngine:
                 self.state["media_title"] = str(data)
 
     def register_remote_command(self, property_name, target_value, timeout=1.5):
-        expire = time.monotonic() + timeout
+        now_mono = time.monotonic()
+        expire = now_mono + timeout
         self.echo_suppressions[property_name] = {
             "value": target_value,
             "expire": expire
         }
+        if property_name == "pause":
+            self.state["paused"] = bool(target_value)
+            self.last_time_update_monotonic = now_mono
+        elif property_name == "time-pos" and target_value is not None:
+            self.state["time_s"] = float(target_value)
+            self.last_time_update_monotonic = now_mono
         logger.debug(f"Registered echo suppression for {property_name} = {target_value} until {expire}")
 
     def _is_suppressed(self, property_name, value, tolerance=0.1):

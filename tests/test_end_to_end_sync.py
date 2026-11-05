@@ -86,12 +86,15 @@ class TestEndToEndSync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.host_mpv.properties["time-pos"], 42.0)
         self.assertAlmostEqual(self.guest_mpv.properties["time-pos"], 42.0, delta=0.5)
 
-        # 5. Rogue Guest Control Rejection
-        # Guest attempts local seek while following
+        # 5. Shared Guest Control (default mode: guest pause & seek syncs to host)
+        await self.guest_ctrl.mpv_client.set_pause(True)
+        await asyncio.sleep(0.3)
+        self.assertTrue(self.guest_mpv.properties["pause"])
+        self.assertTrue(self.host_mpv.properties["pause"])
+
         await self.guest_ctrl.mpv_client.seek(99.0)
         await asyncio.sleep(0.3)
-        # Host must NOT be altered
-        self.assertEqual(self.host_mpv.properties["time-pos"], 42.0)
+        self.assertAlmostEqual(self.host_mpv.properties["time-pos"], 99.0, delta=0.5)
 
         # 6. Status file persistence test
         host_status_file = os.path.join(self.host_tmpdir.name, "status.json")

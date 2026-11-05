@@ -177,6 +177,7 @@ def start(
         help="Provider for tunnel (auto, cloudflared, tailscale)"
     ),
     auto_relay: bool = typer.Option(True, "--auto-relay/--no-auto-relay", help="Automatically launch embedded relay server when role=host"),
+    host_only: bool = typer.Option(False, "--host-only", help="Lock playback controls so only the host can pause, play, or seek (default: shared control)"),
     force: bool = typer.Option(False, "--force", "-f", help="Force launch despite compatibility warnings"),
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live interactive UI and emit raw logs")
 ):
@@ -191,7 +192,8 @@ def start(
         tunnel_provider=tunnel_provider,
         auto_relay=auto_relay,
         force=force,
-        raw=raw
+        raw=raw,
+        host_only=host_only
     )
 
 
@@ -205,7 +207,8 @@ def _run_session(
     tunnel_provider: TunnelProvider,
     auto_relay: bool,
     force: bool,
-    raw: bool
+    raw: bool,
+    host_only: bool = False
 ):
     manifest_path = find_manifest_path()
     app_path = find_stremio_app()
@@ -231,7 +234,8 @@ def _run_session(
         relay_url=relay,
         auto_relay=auto_relay,
         relay_port=port,
-        tunnel=effective_tunnel
+        tunnel=effective_tunnel,
+        host_only=host_only
     )
 
     use_ui = not raw and sys.stdout.isatty()
@@ -502,6 +506,11 @@ def host(
         "--tunnel-provider",
         help="Provider for tunnel (auto, cloudflared, tailscale)"
     ),
+    host_only: bool = typer.Option(
+        False,
+        "--host-only",
+        help="Lock playback controls so only the host can pause, play, or seek (default: shared control)"
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Force launch despite warnings"),
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")
 ):
@@ -517,7 +526,8 @@ def host(
         tunnel_provider=tunnel_provider,
         auto_relay=True,
         force=force,
-        raw=raw
+        raw=raw,
+        host_only=host_only
     )
 
 

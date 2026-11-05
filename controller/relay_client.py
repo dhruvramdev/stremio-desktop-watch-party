@@ -19,6 +19,7 @@ class RelayClient:
         sender: str,
         secret: str,
         role: str | Role = Role.GUEST,
+        host_only: bool = False,
         on_message_callback=None,
         get_state_callback=None
     ):
@@ -27,6 +28,7 @@ class RelayClient:
         self.sender = sender
         self.secret = secret
         self.role = Role(role) if isinstance(role, str) else role
+        self.host_only = bool(host_only)
         self.on_message_callback = on_message_callback
         self.get_state_callback = get_state_callback
 
@@ -70,7 +72,8 @@ class RelayClient:
                         room=self.room,
                         sender=self.sender,
                         secret=self.secret,
-                        role=self.role
+                        role=self.role,
+                        host_only=self.host_only
                     )
                     await websocket.send(hello_msg.model_dump_json())
 
