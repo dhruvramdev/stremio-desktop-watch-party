@@ -165,12 +165,16 @@ def start(
     secret: str = typer.Option("default-secret", "--secret", "-s", help="Room pre-shared authorization secret"),
     relay: str = typer.Option("ws://localhost:8765", "--relay", help="WebSocket relay endpoint URL"),
     port: int = typer.Option(8765, "--port", "-p", help="Port for embedded relay server (when role=host)"),
-    tunnel: Optional[TunnelProvider] = typer.Option(
-        None,
+    tunnel: bool = typer.Option(
+        False,
         "--tunnel",
         "-t",
-        flag_value=TunnelProvider.AUTO,
-        help="Expose host relay via secure internet tunnel (auto/cloudflared/tailscale)"
+        help="Expose host relay via secure internet tunnel (cloudflared)"
+    ),
+    tunnel_provider: TunnelProvider = typer.Option(
+        TunnelProvider.AUTO,
+        "--tunnel-provider",
+        help="Provider for tunnel (auto, cloudflared, tailscale)"
     ),
     auto_relay: bool = typer.Option(True, "--auto-relay/--no-auto-relay", help="Automatically launch embedded relay server when role=host"),
     force: bool = typer.Option(False, "--force", "-f", help="Force launch despite compatibility warnings"),
@@ -190,6 +194,8 @@ def start(
         console.print(json.dumps(details, indent=2))
         raise typer.Exit(code=1)
 
+    effective_tunnel = tunnel_provider.value if tunnel else None
+
     runner = RuntimeEnvironment(
         app_path=app_path,
         role=role.value,
@@ -198,7 +204,7 @@ def start(
         relay_url=relay,
         auto_relay=auto_relay,
         relay_port=port,
-        tunnel=tunnel.value if tunnel else None
+        tunnel=effective_tunnel
     )
 
     use_ui = not raw and sys.stdout.isatty()
@@ -412,17 +418,22 @@ async def _serve_relay_async(port: int, secret: str, tunnel_opt: Optional[Tunnel
 def relay(
     port: int = typer.Option(8765, "--port", "-p", help="Port to bind the WebSocket relay server"),
     secret: str = typer.Option("default-secret", "--secret", "-s", help="Default room pre-shared secret"),
-    tunnel: Optional[TunnelProvider] = typer.Option(
-        None,
+    tunnel: bool = typer.Option(
+        False,
         "--tunnel",
         "-t",
-        flag_value=TunnelProvider.AUTO,
-        help="Expose relay via secure internet tunnel (auto/cloudflared/tailscale)"
+        help="Expose relay via secure internet tunnel (cloudflared)"
+    ),
+    tunnel_provider: TunnelProvider = typer.Option(
+        TunnelProvider.AUTO,
+        "--tunnel-provider",
+        help="Provider for tunnel (auto, cloudflared, tailscale)"
     )
 ):
     """Run standalone WebSocket relay server with optional zero-config Cloudflare/Tailscale tunnel."""
     try:
-        asyncio.run(_serve_relay_async(port, secret, tunnel))
+        effective_tunnel = tunnel_provider if tunnel else None
+        asyncio.run(_serve_relay_async(port, secret, effective_tunnel))
     except KeyboardInterrupt:
         pass
 
@@ -432,12 +443,16 @@ def host(
     room: str = typer.Option("movie-night", "--room", "-r", help="Watch party room identifier"),
     secret: Optional[str] = typer.Option(None, "--secret", "-s", help="Room password (auto-generated if omitted)"),
     port: int = typer.Option(8765, "--port", "-p", help="Embedded relay server port"),
-    tunnel: Optional[TunnelProvider] = typer.Option(
+    tunnel: bool = typer.Option(
+        True,
+        "--tunnel/--no-tunnel",
+        "-t/-nt",
+        help="Expose via internet tunnel (cloudflared)"
+    ),
+    tunnel_provider: TunnelProvider = typer.Option(
         TunnelProvider.AUTO,
-        "--tunnel",
-        "-t",
-        flag_value=TunnelProvider.AUTO,
-        help="Expose via internet tunnel (auto/cloudflared/tailscale)"
+        "--tunnel-provider",
+        help="Provider for tunnel (auto, cloudflared, tailscale)"
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Force launch despite warnings"),
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")
@@ -451,6 +466,7 @@ def host(
         secret=sec,
         port=port,
         tunnel=tunnel,
+        tunnel_provider=tunnel_provider,
         auto_relay=True,
         force=force,
         raw=raw
