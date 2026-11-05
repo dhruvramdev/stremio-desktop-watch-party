@@ -48,6 +48,9 @@ int mpv_initialize_hook(mpv_handle *ctx) {
     }
     
     const char *debug = getenv("STREMIO_WP_DEBUG");
+    if (!debug || debug[0] == '\0') {
+        debug = getenv("WP_DEBUG");
+    }
     if (debug && debug[0] != '\0') {
         fprintf(stderr, "[stremio-wp-shim] mpv_initialize_hook called. Setting input-ipc-server = %s\n", socket_path);
     }
@@ -57,13 +60,11 @@ int mpv_initialize_hook(mpv_handle *ctx) {
         mpv_set_option_string_t set_option = (mpv_set_option_string_t)dlsym(libmpv, "mpv_set_option_string");
         if (set_option) {
             int ret = set_option(ctx, "input-ipc-server", socket_path);
-            if (debug && debug[0] != '\0') {
-                fprintf(stderr, "[stremio-wp-shim] mpv_set_option_string returned %d\n", ret);
-            }
-        } else if (debug && debug[0] != '\0') {
+            fprintf(stderr, "[stremio-wp-shim] set input-ipc-server = %s (rc=%d)\n", socket_path, ret);
+        } else {
             fprintf(stderr, "[stremio-wp-shim] Warning: could not resolve mpv_set_option_string via dlsym\n");
         }
-    } else if (debug && debug[0] != '\0') {
+    } else {
         fprintf(stderr, "[stremio-wp-shim] Warning: could not load libmpv handle in hook\n");
     }
     

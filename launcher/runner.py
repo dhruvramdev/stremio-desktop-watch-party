@@ -3,6 +3,7 @@ Runner and Runtime Environment manager for Stremio Desktop Watch Party.
 """
 
 import os
+import re
 import sys
 import json
 import socket
@@ -82,9 +83,47 @@ class RuntimeEnvironment:
         self.controller_log_file = None
         self.relay_log_file = None
 
+    def _is_dir_active(self, dir_path: str) -> bool:
+        """Check if an existing runtime directory belongs to an active session."""
+        pid_file = os.path.join(dir_path, "watch-party.pid")
+        if not os.path.exists(pid_file):
+            return False
+        try:
+            with open(pid_file, "r") as f:
+                for line in f.read().splitlines():
+                    if line.strip():
+                        pid = int(line.strip())
+                        try:
+                            os.kill(pid, 0)
+                            return True
+                        except ProcessLookupError:
+                            pass
+                        except PermissionError:
+                            return True
+        except Exception:
+            pass
+        return False
+
     def prepare(self):
-        # Create secure 0700 temporary directory
-        self.runtime_dir = tempfile.mkdtemp(prefix="stremio-wp-")
+        # Create secure 0700 runtime directory in /tmp (or STREMIO_WP_RUNTIME_DIR)
+        custom_dir = os.environ.get("STREMIO_WP_RUNTIME_DIR")
+        if custom_dir:
+            self.runtime_dir = os.path.abspath(custom_dir)
+            os.makedirs(self.runtime_dir, mode=0o700, exist_ok=True)
+        else:
+            safe_room = re.sub(r"[^a-zA-Z0-9_-]", "-", self.room or "default").strip("-") or "default"
+            candidate = f"/tmp/stremio-wp-{safe_room}"
+            pid_path = os.path.join(candidate, "watch-party.pid")
+            if not os.path.exists(candidate):
+                os.makedirs(candidate, mode=0o700, exist_ok=True)
+                self.runtime_dir = candidate
+            elif os.path.exists(pid_path) and not self._is_dir_active(candidate):
+                shutil.rmtree(candidate, ignore_errors=True)
+                os.makedirs(candidate, mode=0o700, exist_ok=True)
+                self.runtime_dir = candidate
+            else:
+                self.runtime_dir = tempfile.mkdtemp(prefix=f"stremio-wp-{safe_room}-", dir="/tmp")
+
         os.chmod(self.runtime_dir, 0o700)
         self.socket_path = os.path.join(self.runtime_dir, "mpv.sock")
         
@@ -118,7 +157,6 @@ class RuntimeEnvironment:
         env = os.environ.copy()
         if repo_root not in env.get("PYTHONPATH", ""):
             env["PYTHONPATH"] = repo_root + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-        env["DYLD_INSERT_LIBRARIES"] = shim_path
         env["STREMIO_WP_SOCKET"] = self.socket_path
         env["STREMIO_WP_ROOM"] = self.room
         env["STREMIO_WP_SECRET"] = self.secret
@@ -173,7 +211,10 @@ class RuntimeEnvironment:
                 else:
                     logger.warning("Tunnel could not be established. Falling back to local relay address.")
 
-        # 2. Spawn Stremio via open -a or direct executable
+        stremio_env = env.copy()
+        stremio_env["DYLD_INSERT_LIBRARIES"] = shim_path
+
+        # 2. Spawn Stremio via direct executable
         executable_path = os.path.join(self.app_path, "Contents", "MacOS", "stremio")
         if not os.path.exists(executable_path):
             import plistlib
@@ -198,7 +239,7 @@ class RuntimeEnvironment:
         try:
             self.stremio_proc = subprocess.Popen(
                 [executable_path],
-                env=env,
+                env=stremio_env,
                 stdout=self.stremio_log_file,
                 stderr=self.stremio_log_file
             )
@@ -206,7 +247,7 @@ class RuntimeEnvironment:
             logger.error(f"Failed to spawn Stremio executable directly: {e}. Trying 'open' command...")
             self.stremio_proc = subprocess.Popen(
                 ["open", "-n", self.app_path],
-                env=env,
+                env=stremio_env,
                 stdout=self.stremio_log_file,
                 stderr=self.stremio_log_file
             )

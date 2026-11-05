@@ -51,6 +51,7 @@ class TestRunner(unittest.TestCase):
         )
         runner.prepare()
         self.assertIsNotNone(runner.runtime_dir)
+        self.assertTrue(runner.runtime_dir.startswith("/tmp/stremio-wp-test-cleanup"))
         self.assertTrue(os.path.exists(runner.runtime_dir))
         # Verify 0700 permissions
         stat_mode = os.stat(runner.runtime_dir).st_mode

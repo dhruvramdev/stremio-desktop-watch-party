@@ -47,7 +47,7 @@ build dist: shim
 
 test: shim
 	@echo "==> Running test suite..."
-	$(PYTHON) -m unittest discover -s tests -v
+	$(RUN_PY) -m unittest discover -s tests -v
 
 doctor:
 	@if [ -f dist/watch-party ]; then \

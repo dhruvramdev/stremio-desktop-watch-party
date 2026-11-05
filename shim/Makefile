@@ -1,17 +1,18 @@
 CC = clang
 CFLAGS = -Wall -Wextra -O2 -std=gnu99 -fPIC
-LDFLAGS = -dynamiclib -undefined dynamic_lookup
+LDFLAGS = -dynamiclib -L. -lmpv.2
+TEST_LDFLAGS = -Wl,-rpath,/Applications/Stremio.app/Contents/MacOS
 
 TARGET = libstremio-mpv-ipc-shim.dylib
 TEST_TARGET = test_resolver
 
 all: $(TARGET) $(TEST_TARGET)
 
-$(TARGET): export_resolver.o mpv_ipc_shim.o
-	$(CC) $(LDFLAGS) -o $@ $^
+$(TARGET): export_resolver.o mpv_ipc_shim.o libmpv.2.tbd
+	$(CC) $(LDFLAGS) -o $@ export_resolver.o mpv_ipc_shim.o
 
 test_resolver: test_resolver.o export_resolver.o
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(TEST_LDFLAGS) -o $@ $^
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

@@ -36,13 +36,15 @@ class TerminalDashboard:
         role: str | Role,
         relay_url: str,
         public_url: Optional[str] = None,
-        secret: Optional[str] = None
+        secret: Optional[str] = None,
+        runtime_dir: Optional[str] = None
     ):
         self.room = room
         self.role = Role(role) if isinstance(role, str) else role
         self.relay_url = relay_url
         self.public_url = public_url
         self.secret = secret
+        self.runtime_dir = runtime_dir
         self.console = Console()
         self.live: Optional[Live] = None
 
@@ -124,7 +126,9 @@ class TerminalDashboard:
 
         if role_val == "HOST" and self.secret:
             invite_target = public_url or self.relay_url
-            grid.add_row(f"[bold]Share:[/bold] [cyan]watch-party start --role guest --room {room} --secret {self.secret} --relay {invite_target}[/cyan]", "")
+            grid.add_row(f"[bold]Share:[/bold] [cyan]watch-party join {room} --secret {self.secret} --relay {invite_target}[/cyan]", "")
+        if self.runtime_dir:
+            grid.add_row(f"[bold]Logs:[/bold] [dim]{self.runtime_dir}[/dim]", "")
         grid.add_row("", "")
 
         # Row 2: Media Title

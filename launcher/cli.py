@@ -119,7 +119,7 @@ def doctor(
     # 6. Runtime socket creation test
     try:
         import tempfile
-        test_dir = tempfile.mkdtemp(prefix="stremio-wp-test-")
+        test_dir = tempfile.mkdtemp(prefix="stremio-wp-test-", dir="/tmp")
         os.chmod(test_dir, 0o700)
         test_sock = os.path.join(test_dir, "test.sock")
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -181,6 +181,32 @@ def start(
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live interactive UI and emit raw logs")
 ):
     """Launch Stremio with Mach-O IPC interposition and start synchronized playback session."""
+    _run_session(
+        role=role,
+        room=room,
+        secret=secret,
+        relay=relay,
+        port=port,
+        tunnel=tunnel,
+        tunnel_provider=tunnel_provider,
+        auto_relay=auto_relay,
+        force=force,
+        raw=raw
+    )
+
+
+def _run_session(
+    role: Role,
+    room: str,
+    secret: str,
+    relay: str,
+    port: int,
+    tunnel: bool,
+    tunnel_provider: TunnelProvider,
+    auto_relay: bool,
+    force: bool,
+    raw: bool
+):
     manifest_path = find_manifest_path()
     app_path = find_stremio_app()
 
@@ -194,11 +220,12 @@ def start(
         console.print(json.dumps(details, indent=2))
         raise typer.Exit(code=1)
 
-    effective_tunnel = tunnel_provider.value if tunnel else None
+    effective_tunnel = tunnel_provider.value if (tunnel and tunnel_provider) else None
+    role_val = role.value if isinstance(role, Role) else str(role)
 
     runner = RuntimeEnvironment(
         app_path=app_path,
-        role=role.value,
+        role=role_val,
         room=room,
         secret=secret,
         relay_url=relay,
@@ -229,7 +256,8 @@ def start(
                 role=role,
                 relay_url=runner.relay_url,
                 public_url=runner.public_url,
-                secret=secret
+                secret=secret,
+                runtime_dir=runner.runtime_dir
             )
             dashboard.setup()
         else:
@@ -386,7 +414,7 @@ async def _serve_relay_async(port: int, secret: str, tunnel_opt: Optional[Tunnel
     if public_url:
         console.print(f"Public Secure Tunnel: [bold green]{public_url}[/bold green]")
         console.print("\n[bold]Share with friends:[/bold]")
-        console.print(f"  watch-party start --role guest --room my-room --secret {secret} --relay {public_url}")
+        console.print(f"  watch-party join my-room --secret {secret} --relay {public_url}")
     elif tunnel_opt:
         console.print("[yellow]Warning: Tunnel creation failed. Use --tunnel cloudflared or run cloudflared manually.[/yellow]")
     console.print("=======================================================\n")
@@ -460,10 +488,12 @@ def host(
     """Quickstart: Host a watch party with automatic relay and internet tunnel."""
     import secrets
     sec = secret or secrets.token_hex(4)
-    start(
+    relay_url = f"ws://localhost:{port}"
+    _run_session(
         role=Role.HOST,
         room=room,
         secret=sec,
+        relay=relay_url,
         port=port,
         tunnel=tunnel,
         tunnel_provider=tunnel_provider,
@@ -482,11 +512,15 @@ def join(
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")
 ):
     """Quickstart: Join an active watch party room as a guest."""
-    start(
+    _run_session(
         role=Role.GUEST,
         room=room,
         secret=secret,
         relay=relay,
+        port=8765,
+        tunnel=False,
+        tunnel_provider=TunnelProvider.AUTO,
+        auto_relay=False,
         force=force,
         raw=raw
     )
