@@ -36,7 +36,8 @@ def start_cloudflared_tunnel(port: int, timeout: float = 15.0) -> tuple[subproce
             [cmd, "tunnel", "--url", f"http://127.0.0.1:{port}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            start_new_session=True
         )
     except Exception as e:
         logger.error(f"Failed to spawn cloudflared: {e}")

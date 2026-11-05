@@ -165,6 +165,15 @@ class RuntimeEnvironment:
         env["STREMIO_PATH"] = self.app_path
 
         # 1. If role is host and auto_relay is enabled, ensure relay is up
+        tunnel_state_path = "/tmp/stremio-wp-tunnel.json"
+        existing_tunnel_state = {}
+        if os.path.exists(tunnel_state_path):
+            try:
+                with open(tunnel_state_path, "r", encoding="utf-8") as f:
+                    existing_tunnel_state = json.load(f)
+            except Exception:
+                existing_tunnel_state = {}
+
         if self.role == "host" and self.auto_relay and is_local_url(self.relay_url):
             if is_port_in_use(self.relay_port):
                 logger.info(f"Relay already listening on port {self.relay_port}; connecting to existing instance.")
@@ -182,7 +191,8 @@ class RuntimeEnvironment:
                     relay_cmd,
                     env=env,
                     stdout=self.relay_log_file,
-                    stderr=self.relay_log_file
+                    stderr=self.relay_log_file,
+                    start_new_session=True
                 )
 
                 # Wait up to 3 seconds for relay port to bind
@@ -202,14 +212,40 @@ class RuntimeEnvironment:
                 else:
                     logger.warning(f"Embedded relay server port {self.relay_port} not ready in time; proceeding anyway.")
 
-            # Optional tunnel creation
+            # Optional tunnel creation (reuse existing active tunnel if alive so URL stays fixed)
             if self.tunnel:
-                logger.info(f"Setting up secure tunnel ({self.tunnel}) for relay port {self.relay_port}...")
-                self.tunnel_proc, self.public_url = start_tunnel(self.relay_port, provider=self.tunnel)
-                if self.public_url:
-                    logger.info(f"Secure internet tunnel established: {self.public_url}")
-                else:
-                    logger.warning("Tunnel could not be established. Falling back to local relay address.")
+                reused_tunnel = False
+                saved_t_pid = existing_tunnel_state.get("tunnel_pid")
+                saved_url = existing_tunnel_state.get("public_url")
+                saved_port = existing_tunnel_state.get("port")
+                if saved_t_pid and saved_url and saved_port == self.relay_port:
+                    try:
+                        os.kill(int(saved_t_pid), 0)
+                        self.public_url = saved_url
+                        reused_tunnel = True
+                        logger.info(f"Reusing existing active tunnel ({saved_t_pid}): {self.public_url}")
+                    except Exception:
+                        pass
+
+                if not reused_tunnel:
+                    logger.info(f"Setting up secure tunnel ({self.tunnel}) for relay port {self.relay_port}...")
+                    self.tunnel_proc, self.public_url = start_tunnel(self.relay_port, provider=self.tunnel)
+                    if self.public_url:
+                        logger.info(f"Secure internet tunnel established: {self.public_url}")
+                    else:
+                        logger.warning("Tunnel could not be established. Falling back to local relay address.")
+
+                try:
+                    new_state = {
+                        "port": self.relay_port,
+                        "relay_pid": self.relay_proc.pid if self.relay_proc else existing_tunnel_state.get("relay_pid"),
+                        "tunnel_pid": self.tunnel_proc.pid if self.tunnel_proc else existing_tunnel_state.get("tunnel_pid"),
+                        "public_url": self.public_url
+                    }
+                    with open(tunnel_state_path, "w", encoding="utf-8") as f:
+                        json.dump(new_state, f)
+                except Exception:
+                    pass
 
         stremio_env = env.copy()
         stremio_env["DYLD_INSERT_LIBRARIES"] = shim_path
@@ -303,20 +339,21 @@ class RuntimeEnvironment:
 
     def stop(self):
         logger.info("Stopping Watch Party processes...")
-        if self.tunnel_proc:
-            stop_tunnel(self.tunnel_proc)
-            self.tunnel_proc = None
+        if not self.tunnel:
+            if self.tunnel_proc:
+                stop_tunnel(self.tunnel_proc)
+                self.tunnel_proc = None
 
-        if self.relay_proc:
-            try:
-                self.relay_proc.terminate()
-                self.relay_proc.wait(timeout=2)
-            except Exception:
+            if self.relay_proc:
                 try:
-                    self.relay_proc.kill()
+                    self.relay_proc.terminate()
+                    self.relay_proc.wait(timeout=2)
                 except Exception:
-                    pass
-            self.relay_proc = None
+                    try:
+                        self.relay_proc.kill()
+                    except Exception:
+                        pass
+                self.relay_proc = None
 
         if self.controller_proc:
             try:

@@ -375,6 +375,8 @@ def stop():
     runtime_dirs = glob.glob("/tmp/stremio-wp-*")
     stopped = 0
     for rdir in runtime_dirs:
+        if not os.path.isdir(rdir):
+            continue
         pid_file = os.path.join(rdir, "watch-party.pid")
         if os.path.exists(pid_file):
             try:
@@ -395,6 +397,24 @@ def stop():
             shutil.rmtree(rdir)
         except Exception:
             pass
+
+    tunnel_state_path = "/tmp/stremio-wp-tunnel.json"
+    if os.path.exists(tunnel_state_path):
+        try:
+            with open(tunnel_state_path, "r", encoding="utf-8") as f:
+                tdata = json.load(f)
+            for k in ("tunnel_pid", "relay_pid"):
+                pid = tdata.get(k)
+                if pid:
+                    try:
+                        os.kill(int(pid), signal.SIGTERM)
+                        stopped += 1
+                    except ProcessLookupError:
+                        pass
+            os.unlink(tunnel_state_path)
+        except Exception:
+            pass
+
     console.print(f"[green]Stopped {stopped} active process(es) and cleaned up runtime directories.[/green]")
 
 
@@ -414,7 +434,7 @@ async def _serve_relay_async(port: int, secret: str, tunnel_opt: Optional[Tunnel
     if public_url:
         console.print(f"Public Secure Tunnel: [bold green]{public_url}[/bold green]")
         console.print("\n[bold]Share with friends:[/bold]")
-        console.print(f"  watch-party join my-room --secret {secret} --relay {public_url}")
+        console.print(f"  watch-party join movie-night --secret {secret} --relay {public_url}")
     elif tunnel_opt:
         console.print("[yellow]Warning: Tunnel creation failed. Use --tunnel cloudflared or run cloudflared manually.[/yellow]")
     console.print("=======================================================\n")
@@ -445,7 +465,7 @@ async def _serve_relay_async(port: int, secret: str, tunnel_opt: Optional[Tunnel
 @app.command()
 def relay(
     port: int = typer.Option(8765, "--port", "-p", help="Port to bind the WebSocket relay server"),
-    secret: str = typer.Option("default-secret", "--secret", "-s", help="Default room pre-shared secret"),
+    secret: str = typer.Option("chikita", "--secret", "-s", help="Default room pre-shared secret"),
     tunnel: bool = typer.Option(
         False,
         "--tunnel",
@@ -469,7 +489,7 @@ def relay(
 @app.command()
 def host(
     room: str = typer.Option("movie-night", "--room", "-r", help="Watch party room identifier"),
-    secret: Optional[str] = typer.Option(None, "--secret", "-s", help="Room password (auto-generated if omitted)"),
+    secret: str = typer.Option("chikita", "--secret", "-s", help="Room password (defaults to 'chikita')"),
     port: int = typer.Option(8765, "--port", "-p", help="Embedded relay server port"),
     tunnel: bool = typer.Option(
         True,
@@ -486,13 +506,11 @@ def host(
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")
 ):
     """Quickstart: Host a watch party with automatic relay and internet tunnel."""
-    import secrets
-    sec = secret or secrets.token_hex(4)
     relay_url = f"ws://localhost:{port}"
     _run_session(
         role=Role.HOST,
         room=room,
-        secret=sec,
+        secret=secret,
         relay=relay_url,
         port=port,
         tunnel=tunnel,
@@ -505,8 +523,8 @@ def host(
 
 @app.command()
 def join(
-    room: str = typer.Argument("default-room", help="Watch party room identifier"),
-    secret: str = typer.Option(..., "--secret", "-s", help="Room pre-shared authorization secret"),
+    room: str = typer.Argument("movie-night", help="Watch party room identifier"),
+    secret: str = typer.Option("chikita", "--secret", "-s", help="Room pre-shared authorization secret"),
     relay: str = typer.Option(..., "--relay", help="Host relay WebSocket URL (wss://...)"),
     force: bool = typer.Option(False, "--force", "-f", help="Force launch despite warnings"),
     raw: bool = typer.Option(False, "--raw", "--no-ui", help="Disable live UI and emit raw logs")

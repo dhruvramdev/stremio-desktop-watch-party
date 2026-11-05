@@ -84,12 +84,14 @@ class RelayServer:
             provided_secret = hello.secret
             requested_role = hello.role
 
-            # Get or create room (hosts establish room secret if new)
+            # Get or create room (hosts establish room secret if new or if room has no host)
             if room_id not in self.rooms:
                 room_secret = provided_secret if (requested_role == Role.HOST and provided_secret) else self.default_secret
                 room = await self.register_room(room_id, room_secret)
             else:
                 room = self.rooms[room_id]
+                if requested_role == Role.HOST and room.host_websocket is None and provided_secret:
+                    room.secret = provided_secret
 
             # Verify secret
             if not self.verify_secret(provided_secret, room.secret):
