@@ -254,6 +254,26 @@ class RuntimeEnvironment:
         stremio_env["DYLD_INSERT_LIBRARIES"] = shim_path
 
         # 2. Spawn Stremio via direct executable
+        # If no other watch-party session is active on this machine, ensure any pre-existing
+        # un-shimmed Stremio instance is closed first so Stremio's single-instance lock does not exit(0).
+        import glob
+        other_active = any(
+            d != self.runtime_dir and os.path.isdir(d) and self._is_dir_active(d)
+            for d in glob.glob("/tmp/stremio-wp-*")
+        )
+        if not other_active:
+            try:
+                chk = subprocess.run(["pgrep", "-x", "Stremio"], capture_output=True, text=True)
+                if chk.returncode != 0:
+                    chk = subprocess.run(["pgrep", "-xi", "stremio"], capture_output=True, text=True)
+                if chk.returncode == 0 and chk.stdout.strip():
+                    logger.info("Closing existing Stremio instance to relaunch with Watch Party shim...")
+                    subprocess.run(["killall", "Stremio"], capture_output=True)
+                    subprocess.run(["killall", "stremio"], capture_output=True)
+                    time.sleep(1.0)
+            except Exception:
+                pass
+
         executable_path = os.path.join(self.app_path, "Contents", "MacOS", "stremio")
         if not os.path.exists(executable_path):
             import plistlib
